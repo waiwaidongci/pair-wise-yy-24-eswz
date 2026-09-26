@@ -90,11 +90,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(201, {"ok": True, "id": log_id})
             if parsed.path == "/api/reconcile":
                 return self._json(200, {"ok": True, "exceptions": self.db.reconcile_date(str(body.get("date", "")))})
+            if len(parts) == 4 and parts[:2] == ["api", "programs"] and parts[3] == "update":
+                changes: dict = {}
+                for key in ("title", "kind", "start_date", "end_date"):
+                    if body.get(key) is not None:
+                        changes[key] = str(body[key])
+                for key in ("duration_minutes", "cooldown_minutes"):
+                    if body.get(key) is not None:
+                        changes[key] = int(body[key])
+                if "sponsor" in body:
+                    changes["sponsor"] = body["sponsor"]
+                if body.get("regions") is not None:
+                    changes["regions"] = [str(r) for r in body["regions"]]
+                return self._json(200, {"ok": True, **self.db.update_program(int(parts[2]), **changes)})
             if len(parts) == 4 and parts[:2] == ["api", "slots"] and parts[3] == "replace":
                 return self._json(200, {"ok": True, "slot": self.db.replace_slot(int(parts[2]), int(body.get("new_program_id", 0)))})
+            if len(parts) == 4 and parts[:2] == ["api", "slots"] and parts[3] == "reschedule":
+                return self._json(200, {"ok": True, "slot": self.db.reschedule_slot(
+                    int(parts[2]), str(body.get("air_date", "")), str(body.get("start_time", "")))})
             if len(parts) == 4 and parts[:2] == ["api", "programs"] and parts[3] == "regions":
-                self.db.authorize_region(int(parts[2]), str(body.get("region", "")))
-                return self._json(201, {"ok": True})
+                return self._json(201, {"ok": True, **self.db.authorize_region(int(parts[2]), str(body.get("region", "")))})
             self._json(404, {"ok": False, "error": "接口不存在"})
         except (DomainError, ValueError) as exc:
             self._json(400, {"ok": False, "error": str(exc)})

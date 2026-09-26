@@ -7,27 +7,66 @@ body{font:15px system-ui;max-width:1100px;margin:24px auto;padding:0 16px;backgr
 section{background:white;padding:16px;margin:12px 0;border:1px solid #ddd;border-radius:10px}
 input,select,button{padding:7px;margin:3px;border:1px solid #bbb;border-radius:6px}
 button{cursor:pointer;background:#16324f;color:white}pre{white-space:pre-wrap;max-height:360px;overflow:auto}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left}
+tr.history{color:#999}tr.pending{background:#fff3f0}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.grid input{width:90%}
 </style>
 <h1>电台播出与版权窗口排程</h1>
-<section><h2>当前计划</h2><button onclick="load()">刷新</button><pre id="state"></pre></section>
+<section><h2>节目版本</h2><button onclick="load()">刷新</button><div id="programs"></div></section>
+<section><h2>待改排期</h2><div id="pending"></div></section>
 <section><h2>新建节目</h2><div class="grid">
 <input id="title" placeholder="节目名"><select id="kind"><option>music</option><option>ad</option><option>talk</option><option>live</option></select>
 <input id="duration" type="number" value="30" placeholder="分钟"><input id="start" value="2026-01-01"><input id="end" value="2026-12-31">
 <input id="region" value="华东"><input id="sponsor" placeholder="赞助商，可空"><input id="cooldown" type="number" value="0" placeholder="冷却分钟">
 </div><button onclick="addProgram()">创建并授权地区</button></section>
-<section><h2>排期 / 替换 / 实播对账</h2>
+<section><h2>节目改版（生成新版本，未播排期立即重查）</h2><div class="grid">
+<input id="upid" type="number" placeholder="节目 ID"><input id="uptitle" placeholder="新节目名，可空"><input id="upduration" type="number" placeholder="新时长分钟，可空">
+<input id="upstart" placeholder="新授权开始，可空"><input id="upend" placeholder="新授权结束，可空"><input id="upregions" placeholder="新授权地区，逗号分隔，可空">
+<input id="upsponsor" placeholder="新赞助商，可空"><input id="upcooldown" type="number" placeholder="新冷却分钟，可空">
+</div><button onclick="updateProgram()">生成新版本并重查排期</button></section>
+<section><h2>排期 / 替换 / 改期 / 实播对账</h2>
 <div class="grid"><input id="airdate" value="2026-09-28"><input id="starttime" value="12:00"><input id="pid" type="number" placeholder="节目 ID">
 <input id="sid" type="number" placeholder="排期 ID"><input id="newpid" type="number" placeholder="替换节目 ID"><input id="actualstart" value="12:00">
-<input id="actualduration" type="number" value="30" placeholder="实播分钟"><input id="actualpid" type="number" placeholder="实播节目 ID，可空"></div>
-<button onclick="schedule()">排期</button><button onclick="replace()">替换</button><button onclick="playout()">记录实播</button><button onclick="reconcile()">对账</button><pre id="result"></pre></section>
+<input id="actualduration" type="number" value="30" placeholder="实播分钟"><input id="actualpid" type="number" placeholder="实播节目 ID，可空">
+<input id="newdate" placeholder="改期日期"><input id="newtime" placeholder="改期时间 HH:MM"></div>
+<button onclick="schedule()">排期</button><button onclick="replace()">替换</button><button onclick="reschedule()">改期</button>
+<button onclick="playout()">记录实播</button><button onclick="reconcile()">对账</button><pre id="result"></pre></section>
+<section><h2>原始数据</h2><pre id="state"></pre></section>
 <script>
-const api=async(url,body)=>{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();out(j);return j};
+const api=async(url,body)=>{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();out(j);load();return j};
 const out=x=>document.querySelector('#result').textContent=JSON.stringify(x,null,2);
-async function load(){document.querySelector('#state').textContent=JSON.stringify(await (await fetch('/api/state')).json(),null,2)}
-function addProgram(){api('/api/programs',{title:title.value,kind:kind.value,duration_minutes:+duration.value,start_date:start.value,end_date:end.value,region:region.value,regions:[region.value],sponsor:sponsor.value||null,cooldown_minutes:+cooldown.value})}
+async function load(){
+  const s=await (await fetch('/api/state')).json();
+  document.querySelector('#state').textContent=JSON.stringify(s,null,2);
+  renderPrograms(s);renderPending(s);
+}
+function renderPrograms(s){
+  document.querySelector('#programs').innerHTML='<table><tr><th>ID</th><th>版本</th><th>节目</th><th>类型</th><th>时长</th><th>授权窗口</th><th>授权地区</th><th>状态</th></tr>'+
+  s.programs.map(p=>`<tr class="${p.active?'':'history'}"><td>${p.id}</td><td>v${p.version}</td><td>${p.title}</td><td>${p.kind}</td><td>${p.duration_minutes} 分钟</td><td>${p.start_date} ~ ${p.end_date}</td><td>${(p.regions||[]).join('、')}</td><td>${p.active?'当前':'历史'}</td></tr>`).join('')+'</table>';
+}
+function renderPending(s){
+  const rows=s.slots.filter(x=>x.status==='pending');
+  document.querySelector('#pending').innerHTML=rows.length
+    ?'<table><tr><th>排期</th><th>节目</th><th>原时段</th><th>失败原因</th><th>仍可播起点</th><th>操作</th></tr>'+
+     rows.map(x=>`<tr class="pending"><td>#${x.id}</td><td>${x.title} (v${x.program_version})</td><td>${x.air_date} ${x.start_time} ${x.region}</td><td>${x.review_reason||''}</td><td>${x.next_playable_start||'当天无可播时段'}</td><td>${x.next_playable_start?`<button onclick="adopt(${x.id},'${x.air_date}','${x.next_playable_start}')">按可播起点改期</button>`:''}</td></tr>`).join('')+'</table>'
+    :'<p>没有待改排期</p>';
+}
+function addProgram(){api('/api/programs',{title:title.value,kind:kind.value,duration_minutes:+duration.value,start_date:start.value,end_date:end.value,regions:[region.value],sponsor:sponsor.value||null,cooldown_minutes:+cooldown.value})}
+function updateProgram(){
+  const body={};
+  if(uptitle.value)body.title=uptitle.value;
+  if(upduration.value)body.duration_minutes=+upduration.value;
+  if(upstart.value)body.start_date=upstart.value;
+  if(upend.value)body.end_date=upend.value;
+  if(upregions.value)body.regions=upregions.value.split(/[,，、]/).map(x=>x.trim()).filter(Boolean);
+  if(upsponsor.value)body.sponsor=upsponsor.value;
+  if(upcooldown.value)body.cooldown_minutes=+upcooldown.value;
+  api('/api/programs/'+upid.value+'/update',body);
+}
 function schedule(){api('/api/schedule',{air_date:airdate.value,start_time:starttime.value,program_id:+pid.value,region:region.value})}
 function replace(){api('/api/slots/'+sid.value+'/replace',{new_program_id:+newpid.value})}
+function reschedule(){api('/api/slots/'+sid.value+'/reschedule',{air_date:newdate.value,start_time:newtime.value})}
+function adopt(id,date,start){api('/api/slots/'+id+'/reschedule',{air_date:date,start_time:start})}
 function playout(){api('/api/playout',{slot_id:+sid.value,actual_start:actualstart.value,actual_duration_minutes:+actualduration.value,actual_program_id:actualpid.value?+actualpid.value:null})}
 function reconcile(){api('/api/reconcile',{date:airdate.value})}
 load();

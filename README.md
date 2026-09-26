@@ -2,6 +2,16 @@
 
 一个不依赖第三方包、使用 SQLite 和标准库 HTTP 服务的电台排程项目。系统把“计划排期”和“实际播出”分开保存，支持地区授权、日期窗口、禁播时段、节目冷却、赞助商间隔、直播临时替换、实播对账与版权越界检查。
 
+## 节目版本与排期重查
+
+节目资料（时长、授权窗口、授权地区、赞助商、冷却等）的每次修改都会生成**新版本**，旧版本立即停用、仅保留作历史，不能再排期也不能再修改。新版本生成后，系统在同一事务内立即重查所有仍引用旧版本且未播出的排期：
+
+- **校验通过**：排期自动改指新版本，状态保持 `planned`；
+- **校验失败**：排期退回 `pending`（待改），保留原时段，并记录失败原因和当天仍可播的最早起点；待改排期不占时段，可改期或替换后回到 `planned`；
+- **已替换或已有实播记录**的排期保持当时的版本，对账和页面都按当时资料显示。
+
+代码按职责分层：`programs.py` 负责节目维护（版本生成），`scheduling.py` 负责排期判定（校验、重查、对账），`app.py` 与 `static/` 负责页面和接口操作，`database.py` 只负责存储、建表与旧库迁移。
+
 ## 运行
 
 需要 Python 3.11+。
@@ -26,12 +36,14 @@ python -m unittest discover -s tests -v
 
 ## 主要 API
 
-- `GET /api/state`：节目、排期和最近对账异常
+- `GET /api/state`：节目（含历史版本）、排期（含待改原因与可播起点）和最近对账异常
 - `POST /api/programs`：创建节目并授权地区
-- `POST /api/programs/{id}/regions`：追加地区授权
+- `POST /api/programs/{id}/update`：节目改版，生成新版本并立即重查未播排期，返回迁移/待改/保留清单
+- `POST /api/programs/{id}/regions`：追加地区授权（同样生成新版本并重查）
 - `POST /api/schedule`：创建排期
-- `POST /api/slots/{id}/replace`：替换计划节目并重新校验
+- `POST /api/slots/{id}/replace`：替换计划节目并重新校验（planned/待改均可）
+- `POST /api/slots/{id}/reschedule`：调整排期时段，校验通过后回到 planned
 - `POST /api/playout`：登记实播记录
 - `POST /api/reconcile`：按日期生成漏播、错播、时长偏差和超授权异常
 
-准备排期时填写 `air_date`、`start_time`、`program_id`、`region`。页面会直接显示校验错误，不会保存失败的排期。
+准备排期时填写 `air_date`、`start_time`、`program_id`、`region`。页面会直接显示校验错误，不会保存失败的排期。节目改版后，页面“待改排期”一栏会列出原时段、失败原因和仍可播的起点，可一键按可播起点改期。
