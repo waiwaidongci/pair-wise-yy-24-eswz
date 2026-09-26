@@ -71,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("title", "")), str(body.get("kind", "music")),
                     int(body.get("duration_minutes", 0)), str(body.get("start_date", "")),
                     str(body.get("end_date", "")), body.get("sponsor"), int(body.get("cooldown_minutes", 0)),
-                    body.get("regions") or [],
+                    body.get("regions") or ([str(body["region"]).strip()] if body.get("region") else []),
                 )
                 return self._json(201, {"ok": True, "id": program_id})
             if parsed.path == "/api/schedule":
@@ -90,14 +90,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(201, {"ok": True, "id": log_id})
             if parsed.path == "/api/reconcile":
                 return self._json(200, {"ok": True, "exceptions": self.db.reconcile_date(str(body.get("date", "")))})
-            if len(parts) == 4 and parts[:2] == ["api", "slots"] and parts[3] == "replace":
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "programs" and parts[3] == "revise":
+                report = self._revise_program(int(parts[2]), body)
+                return self._json(200, {"ok": True, "report": report})
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "programs" and parts[3] == "regions":
+                report = self.db.authorize_region(int(parts[2]), str(body.get("region", "")))
+                return self._json(201, {"ok": True, "report": report})
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "slots" and parts[3] == "replace":
                 return self._json(200, {"ok": True, "slot": self.db.replace_slot(int(parts[2]), int(body.get("new_program_id", 0)))})
-            if len(parts) == 4 and parts[:2] == ["api", "programs"] and parts[3] == "regions":
-                self.db.authorize_region(int(parts[2]), str(body.get("region", "")))
-                return self._json(201, {"ok": True})
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "slots" and parts[3] == "revise":
+                slot = self.db.revise_slot(
+                    int(parts[2]),
+                    str(body["start_time"]) if body.get("start_time") else None,
+                    str(body["region"]) if body.get("region") else None,
+                )
+                return self._json(200, {"ok": True, "slot": slot})
             self._json(404, {"ok": False, "error": "接口不存在"})
         except (DomainError, ValueError) as exc:
             self._json(400, {"ok": False, "error": str(exc)})
+
+    def _revise_program(self, program_id: int, body: dict) -> dict:
+        """Only provided fields change; omitted fields keep the old version."""
+        changes = {}
+        for key in ("duration_minutes", "cooldown_minutes"):
+            if key in body and body[key] != "":
+                changes[key] = int(body[key])
+        for key in ("start_date", "end_date"):
+            if body.get(key):
+                changes[key] = str(body[key])
+        if "sponsor" in body:
+            changes["sponsor"] = str(body["sponsor"]).strip() or None
+        if "regions" in body:
+            changes["regions"] = body["regions"] if isinstance(body["regions"], list) else []
+        return self.db.revise_program(program_id, **changes)
 
 
 def main() -> None:
